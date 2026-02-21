@@ -1,1 +1,0 @@
-"""snpviewer package."""

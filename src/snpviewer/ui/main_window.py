@@ -1,9 +1,10 @@
-"""Qt main window for Touchstone loading."""
+"""Qt main window for loading and summarizing Touchstone files."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -14,10 +15,8 @@ from PySide6.QtWidgets import (
     QToolBar,
     QWidget,
 )
-from PySide6.QtGui import QAction
 
-from snpviewer.services.network_service import NetworkService
-from snpviewer.touchstone_loader import NetworkSummary, TouchstoneLoadError
+from snpviewer.services.network_service import NetworkService, NetworkSummary
 
 
 class MainWindow(QMainWindow):
@@ -85,7 +84,7 @@ class MainWindow(QMainWindow):
 
         try:
             summary = self._network_service.load_touchstone(selected_path)
-        except TouchstoneLoadError as exc:
+        except (ValueError, OSError) as exc:
             self._show_load_error(selected_path, str(exc))
             self.statusBar().showMessage("Failed to load Touchstone file", 5000)
             return
@@ -108,8 +107,8 @@ class MainWindow(QMainWindow):
         dialog.setIcon(QMessageBox.Icon.Critical)
         dialog.setText("The selected file could not be loaded.")
         dialog.setInformativeText(
-            "Please confirm the file exists, has a valid extension like .s1p/.s2p, "
-            "and contains readable Touchstone frequency data."
+            "Try validating that the file exists, has a Touchstone extension "
+            "(.s1p/.s2p/etc.), and is readable. Then retry loading the file."
         )
         dialog.setDetailedText(f"Path: {Path(path)}\n\nDetails: {reason}")
         dialog.exec()
