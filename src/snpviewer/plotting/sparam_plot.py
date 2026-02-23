@@ -1,20 +1,18 @@
-"""Qt-embedded matplotlib plotting for S-parameter traces."""
+"""Qt-embedded matplotlib plot widget for S-parameter traces."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Sequence
+from typing import Iterable
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
 
 class DisplayMode(str, Enum):
-    """Display modes for complex S-parameter data."""
+    """Supported display modes for complex S-parameter data."""
 
     MAG_DB = "|S| dB"
     PHASE_DEG = "Phase (deg)"
@@ -22,88 +20,58 @@ class DisplayMode(str, Enum):
     IMAG = "Imag"
 
 
-@dataclass(frozen=True)
-class TraceSelection:
-    """Represents an Sij trace selection."""
-
-    i: int
-    j: int
-
-    @property
-    def label(self) -> str:
-        return f"S{self.i + 1}{self.j + 1}"
-
-
 class SParameterPlotWidget(QWidget):
-    """Combined controls + matplotlib canvas for browsing S-parameters."""
+    """Matplotlib canvas embedded in Qt for plotting selected S-parameter traces."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._network = None
-        self._trace_map: list[TraceSelection] = []
-
-        self.trace_list = QListWidget(self)
-        self.trace_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-
-        self.display_mode_combo = QComboBox(self)
-        for mode in DisplayMode:
-            self.display_mode_combo.addItem(mode.value, mode)
+        self._network: object | None = None
+        self._display_mode: DisplayMode = DisplayMode.MAG_DB
+        self._selected_trace_labels: list[str] = []
 
         self.figure = Figure(constrained_layout=True)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.axes = self.figure.add_subplot(1, 1, 1)
 
-        controls_layout = QHBoxLayout()
-        controls_layout.addWidget(QLabel("Display:"))
-        controls_layout.addWidget(self.display_mode_combo)
-
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Trace (Sij):"))
-        layout.addWidget(self.trace_list)
-        layout.addLayout(controls_layout)
-        layout.addWidget(self.canvas, 1)
+        layout.addWidget(self.canvas)
 
-        self.trace_list.currentRowChanged.connect(lambda _idx: self.refresh_plot())
-        self.display_mode_combo.currentIndexChanged.connect(lambda _idx: self.refresh_plot())
+    def set_network(self, network: object | None) -> None:
+        """Set a scikit-rf-like network object.
 
-    def set_network(self, network: object) -> None:
-        """Set a scikit-rf-like network object and populate available traces.
-
-        Expected attributes:
-        - ``network.s`` complex ndarray with shape ``(n_freq, n_port, n_port)``
-        - ``network.f`` frequency ndarray in Hz
+        Network shape is expected to be ``network.s.shape == (n_freq, n_port, n_port)``
+        and frequencies are expected in ``network.f`` as Hz.
         """
 
         self._network = network
-        self._populate_traces_from_network()
+        if network is None:
+            self._selected_trace_labels = []
+        elif not self._selected_trace_labels:
+            labels = self.available_trace_labels()
+            if labels:
+                self._selected_trace_labels = [labels[0]]
         self.refresh_plot()
 
-    def _populate_traces_from_network(self) -> None:
-        self.trace_list.clear()
-        self._trace_map.clear()
+    def set_display_mode(self, mode: DisplayMode) -> None:
+        self._display_mode = mode
+        self.refresh_plot()
+
+    def set_selected_trace_labels(self, labels: Iterable[str]) -> None:
+        self._selected_trace_labels = list(labels)
+        self.refresh_plot()
+
+    def available_trace_labels(self) -> list[str]:
+        """Return Sij labels generated from ``network.s.shape`` for n-port data."""
 
         if self._network is None:
-            return
-
-        n_ports = int(self._network.s.shape[1])
-        for i in range(n_ports):
-            for j in range(n_ports):
-                selection = TraceSelection(i=i, j=j)
-                self._trace_map.append(selection)
-                self.trace_list.addItem(QListWidgetItem(selection.label))
-
-        if self._trace_map:
-            self.trace_list.setCurrentRow(0)
-
-    def current_display_mode(self) -> DisplayMode:
-        mode = self.display_mode_combo.currentData(Qt.ItemDataRole.UserRole)
-        return mode if isinstance(mode, DisplayMode) else DisplayMode.MAG_DB
-
-    def selected_traces(self) -> Sequence[TraceSelection]:
-        row = self.trace_list.currentRow()
-        if row < 0 or row >= len(self._trace_map):
             return []
-        return [self._trace_map[row]]
+
+        s_matrix = np.asarray(self._network.s)
+        if s_matrix.ndim != 3:
+            return []
+
+        n_ports = int(s_matrix.shape[1])
+        return [f"S{i + 1}{j + 1}" for i in range(n_ports) for j in range(n_ports)]
 
     def refresh_plot(self) -> None:
         self.axes.clear()
@@ -113,39 +81,43 @@ class SParameterPlotWidget(QWidget):
             self.canvas.draw_idle()
             return
 
-        freq_hz = np.asarray(self._network.f)
-        freq_ghz = freq_hz / 1e9
-        display_mode = self.current_display_mode()
+        freq_ghz = np.asarray(self._network.f, dtype=float) / 1e9
+        ylabel = "Value"
 
-        for trace in self.selected_traces():
-            complex_values = np.asarray(self._network.s[:, trace.i, trace.j])
-            y_data, y_label = self._format_trace(complex_values, display_mode)
-            self.axes.plot(freq_ghz, y_data, label=trace.label)
+        for trace_label in self._selected_trace_labels:
+            parsed = self._parse_trace_label(trace_label)
+            if parsed is None:
+                continue
+
+            i_idx, j_idx = parsed
+            complex_values = np.asarray(self._network.s[:, i_idx, j_idx])
+            y_data, ylabel = self._format_trace(complex_values, self._display_mode)
+            self.axes.plot(freq_ghz, y_data, label=trace_label)
 
         self.axes.set_xlabel("Frequency (GHz)")
-        self.axes.set_ylabel(y_label if self.selected_traces() else "Value")
-        self.axes.legend()
+        self.axes.set_ylabel(ylabel)
+        if self.axes.lines:
+            self.axes.legend()
         self.axes.grid(True, alpha=0.3)
         self.canvas.draw_idle()
 
     @staticmethod
+    def _parse_trace_label(label: str) -> tuple[int, int] | None:
+        if len(label) != 3 or not label.startswith("S"):
+            return None
+        if not (label[1].isdigit() and label[2].isdigit()):
+            return None
+        return int(label[1]) - 1, int(label[2]) - 1
+
+    @staticmethod
     def _format_trace(values: np.ndarray, mode: DisplayMode) -> tuple[np.ndarray, str]:
-        if mode == DisplayMode.MAG_DB:
+        if mode is DisplayMode.MAG_DB:
             magnitude = np.maximum(np.abs(values), 1e-16)
-            return 20 * np.log10(magnitude), "Magnitude (dB)"
-        if mode == DisplayMode.PHASE_DEG:
+            return 20.0 * np.log10(magnitude), "Magnitude (dB)"
+        if mode is DisplayMode.PHASE_DEG:
             return np.angle(values, deg=True), "Phase (deg)"
-        if mode == DisplayMode.REAL:
+        if mode is DisplayMode.REAL:
             return np.real(values), "Real"
-        if mode == DisplayMode.IMAG:
+        if mode is DisplayMode.IMAG:
             return np.imag(values), "Imag"
         raise ValueError(f"Unsupported display mode: {mode}")
-
-    def set_selected_trace_labels(self, labels: Iterable[str]) -> None:
-        """Select a trace by label (e.g., ``S21``) for external UI integration."""
-
-        label_set = set(labels)
-        for idx, trace in enumerate(self._trace_map):
-            if trace.label in label_set:
-                self.trace_list.setCurrentRow(idx)
-                break

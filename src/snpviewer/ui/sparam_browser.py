@@ -1,61 +1,60 @@
-"""UI integration for interactive S-parameter browsing."""
+"""UI integration widget for browsing S-parameter traces."""
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QComboBox, QFormLayout, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QComboBox, QFormLayout, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 from snpviewer.plotting.sparam_plot import DisplayMode, SParameterPlotWidget
 
 
 class SParameterBrowserWidget(QWidget):
-    """High-level UI wrapper that exposes parameter/mode controls + plot."""
+    """Composite widget exposing trace and display controls with a plot canvas."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
+        self.trace_list = QListWidget(self)
+        self.trace_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+
+        self.display_combo = QComboBox(self)
+        for mode in DisplayMode:
+            self.display_combo.addItem(mode.value, mode)
+
         self.plot_widget = SParameterPlotWidget(self)
 
-        self.parameter_combo = QComboBox(self)
-        self.display_combo = QComboBox(self)
-
-        self.display_combo.addItem(DisplayMode.MAG_DB.value, DisplayMode.MAG_DB)
-        self.display_combo.addItem(DisplayMode.PHASE_DEG.value, DisplayMode.PHASE_DEG)
-        self.display_combo.addItem(DisplayMode.REAL.value, DisplayMode.REAL)
-        self.display_combo.addItem(DisplayMode.IMAG.value, DisplayMode.IMAG)
-
-        form = QFormLayout()
-        form.addRow("Parameter:", self.parameter_combo)
-        form.addRow("Mode:", self.display_combo)
+        controls = QFormLayout()
+        controls.addRow("Display mode:", self.display_combo)
+        controls.addRow("Traces:", self.trace_list)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addLayout(controls)
         layout.addWidget(self.plot_widget)
 
-        self.parameter_combo.currentTextChanged.connect(self._on_parameter_change)
-        self.display_combo.currentIndexChanged.connect(self._on_mode_change)
+        self.display_combo.currentIndexChanged.connect(self._on_display_mode_changed)
+        self.trace_list.itemSelectionChanged.connect(self._on_trace_selection_changed)
 
     def set_network(self, network: object) -> None:
-        """Set a network and auto-populate all available Sij traces."""
+        """Set network and auto-populate available Sij traces from its shape."""
 
         self.plot_widget.set_network(network)
-        self.parameter_combo.clear()
-        for trace in self.plot_widget._trace_map:
-            self.parameter_combo.addItem(trace.label)
+        self.trace_list.clear()
 
-        if self.parameter_combo.count() > 0:
-            self.parameter_combo.setCurrentIndex(0)
+        for label in self.plot_widget.available_trace_labels():
+            self.trace_list.addItem(QListWidgetItem(label))
 
-    def _on_parameter_change(self, label: str) -> None:
-        if label:
-            self.plot_widget.set_selected_trace_labels([label])
-            self.plot_widget.refresh_plot()
+        if self.trace_list.count() > 0:
+            self.trace_list.item(0).setSelected(True)
+        self._sync_plot_selection()
 
-    def _on_mode_change(self, _index: int) -> None:
-        mode = self.display_combo.currentData()
-        if mode is None:
-            return
-        idx = self.plot_widget.display_mode_combo.findData(mode)
-        if idx >= 0:
-            self.plot_widget.display_mode_combo.setCurrentIndex(idx)
-        else:
-            self.plot_widget.refresh_plot()
+    def _on_display_mode_changed(self, _index: int) -> None:
+        mode = self.display_combo.currentData(Qt.ItemDataRole.UserRole)
+        if isinstance(mode, DisplayMode):
+            self.plot_widget.set_display_mode(mode)
+
+    def _on_trace_selection_changed(self) -> None:
+        self._sync_plot_selection()
+
+    def _sync_plot_selection(self) -> None:
+        labels = [item.text() for item in self.trace_list.selectedItems()]
+        self.plot_widget.set_selected_trace_labels(labels)
