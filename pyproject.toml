@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snpviewer"
+version = "0.1.0"
+description = "Desktop S-parameter viewer built with scikit-rf and Qt"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "scikit-rf",
+  "numpy",
+  "matplotlib",
+  "PySide6",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "ruff",
+  "mypy",
+]
+
+[project.scripts]
+snpviewer = "snpviewer.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
